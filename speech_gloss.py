@@ -58,7 +58,6 @@ class SpeechGloss:
             "the": "",
             "a": "",
             "an": "",
-            "and": "PLUS",
             "but": "BUT",
             "this": "THIS",
             "that": "THAT",

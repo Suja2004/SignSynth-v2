@@ -72,6 +72,7 @@ a = Analysis(
         (os.path.join(project_path, 'character'), 'character'),
         (os.path.join(project_path, 'skybox'), 'skybox'),
         (os.path.join(project_path, 'vosk-model-small-en-us-0.15'), 'vosk-model-small-en-us-0.15'),
+        (os.path.join(project_path, 'assets'), 'assets'),
         (os.path.join(panda3d_path, 'etc'), 'etc'),
         (panda3d_path, 'panda3d'),
     ] + nltk_datas,
@@ -122,7 +123,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     icon=r'C:\Users\DELL\PycharmProjects\SignSynthv2\SignSynth.ico',
 )

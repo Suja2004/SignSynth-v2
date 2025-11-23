@@ -68,7 +68,7 @@ class LoadingScreen:
         )
         self.canvas.create_text(
             300, 140,
-            text="YouTube Sign Language Integrator",
+            text="Sign Language Translator",
             font=("Segoe UI", 16),
             fill="#a0a0a0",
             tags="subtitle"

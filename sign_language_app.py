@@ -5,13 +5,20 @@ import nltk
 import time
 import win32com.client
 from direct.task import Task
+import sounddevice as sd
 from direct.showbase.ShowBase import ShowBase
+from direct.gui.DirectGui import DGG
 from direct.gui.DirectFrame import DirectFrame
 from direct.gui.DirectButton import DirectButton
 from direct.gui.OnscreenText import OnscreenText
-from direct.interval.IntervalGlobal import Sequence
+from direct.gui.DirectLabel import DirectLabel
+from direct.gui.DirectRadioButton import DirectRadioButton
+from direct.gui.DirectOptionMenu import DirectOptionMenu
+from direct.gui.DirectCheckButton import DirectCheckButton
+from direct.interval.IntervalGlobal import Sequence, LerpFunc, Wait, Func
 from direct.interval.LerpInterval import LerpPosInterval, LerpHprInterval
-from panda3d.core import LVecBase3f, DirectionalLight, AmbientLight, TextNode, WindowProperties, Filename
+from panda3d.core import (LVecBase3f, DirectionalLight, AmbientLight, TextNode, WindowProperties, Filename,
+                          TransparencyAttrib)
 
 try:
     nltk.data.find('tokenizers/punkt_tab')
@@ -93,6 +100,31 @@ class SignLanguageApp(ShowBase):
         else:
             print("Error: Failed to open Panda3D window.")
 
+    def add_tooltip(self, button, text):
+        tooltip = OnscreenText(
+            text=text,
+            style=1,
+            fg=(1, 1, 1, 1),
+            bg=(0, 0, 0, 0),
+            scale=0.5,
+            pos=(2, 0),
+            mayChange=True,
+            wordwrap=6,
+            align=TextNode.ACenter
+        )
+        tooltip.hide()
+
+        button.bind(DGG.ENTER, lambda event: tooltip.show())
+        button.bind(DGG.EXIT, lambda event: tooltip.hide())
+
+        tooltip.reparentTo(button)
+
+    def toggle_tab(self):
+        if self.audio_settings_frame.isHidden():
+            self.audio_settings_frame.show()
+        else:
+            self.audio_settings_frame.hide()
+
     def setup_ui(self):
         """
         Create a consolidated, on-screen user interface panel.
@@ -136,38 +168,148 @@ class SignLanguageApp(ShowBase):
 
         self.speech_toggle_button = DirectButton(
             parent=self.top_bar_frame,
-            text="Speech",
-            text_scale=0.05,
-            frameSize=(-0.2, 0.2, -0.08, 0.08),
+            image="assets/icons/speech-recognition-on.png",
+            scale=0.1,
             command=self.toggle_speech_recognition,
-            pos=(0.6, 0, 0.1),
+            pos=(0.55, 0, 0.1),
             frameColor=COLOR_ACTIVE,
-            relief='raised',
-            borderWidth=(0.01, 0.01)
+            relief=None
         )
 
         self.media_toggle_button = DirectButton(
             parent=self.top_bar_frame,
-            text="Media Control",
-            text_scale=0.05,
-            frameSize=(-0.2, 0.2, -0.08, 0.08),
+            image="assets/icons/media-control-off.png",
+            scale=0.1,
             command=self.toggle_media_control,
-            pos=(0.6, 0, -0.1),
+            pos=(0.55, 0, -0.1),
             frameColor=COLOR_INACTIVE,
-            relief='raised',
-            borderWidth=(0.01, 0.01)
+            relief=None
         )
 
         self.reset_button = DirectButton(
             parent=self.top_bar_frame,
-            text="Reset",
-            text_scale=0.05,
-            frameSize=(-0.2, 0.2, -0.08, 0.08),
+            image="assets/icons/reset.png",
+            scale=0.1,
             command=self.reset_app,
-            pos=(-0.7, 0, 0.1),
+            pos=(0.55, 0, 0.3),
             frameColor=(0.8, 0.2, 0.2, 1),
+            relief=None
+        )
+
+        for btn in [self.speech_toggle_button, self.media_toggle_button, self.reset_button]:
+            btn.setTransparency(TransparencyAttrib.MAlpha)
+
+        self.add_tooltip(self.speech_toggle_button, "Speech Recognition")
+        self.add_tooltip(self.media_toggle_button, "Media Control")
+        self.add_tooltip(self.reset_button, "Reset")
+
+    def setup_audio_settings_tab():
+        self.radio_mic_only = None
+        self.radio_loop_only = None
+        self.radio_mixed = None
+        self.enable_loopback_btn = None
+        self.loopback_enabled = False
+
+        self.audio_source_mode = "MIC"
+        self.noise_reduction = False
+
+        self.audio_settings_frame = DirectFrame(
+            frameColor=(0.1, 0.1, 0.1, 0.9),
+            frameSize=(-1.3, 1.3, -0.75, 0.75),
+            pos=(0, 0, 0)
+        )
+        self.audio_settings_frame.hide()
+
+        self.close_audio_tab_btn = DirectButton(
+            parent=self.audio_settings_frame,
+            text="✕",
+            scale=0.05,
+            pos=(0.85, 0, 0.45),
+            command=self.toggle_tab,
+            frameColor=(0.8, 0.2, 0.2, 1),
+            relief='flat'
+        )
+
+        self.tab_settings_audio_button = DirectButton(
+            parent=self.top_bar_frame,
+            text="Audio",
+            scale=0.055,
+            command=self.toggle_tab,
+            pos=(-1.0, 0, 0),
+            frameColor=(0.25, 0.25, 0.25, 1),
             relief='raised',
-            borderWidth=(0.01, 0.01)
+            text_fg=(1, 1, 1, 1)
+        )
+
+        DirectLabel(
+            parent=self.audio_settings_frame, text="Audio Settings",
+            scale=0.06, pos=(0, 0, 0.40), text_fg=(1, 1, 1, 1)
+        )
+        DirectLabel(
+            parent=self.audio_settings_frame, text="Input Source",
+            scale=0.05, pos=(-0.85, 0, 0.28),
+            text_align=TextNode.ALeft, text_fg=(1, 1, 1, 1)
+        )
+
+        def change_audio_source():
+            if not (self.radio_mic_only and self.radio_loop_only and self.radio_mixed):
+                return
+
+            if self.radio_mic_only['indicatorValue']:
+                self.audio_source_mode = "MIC"
+            elif self.radio_loop_only['indicatorValue']:
+                self.audio_source_mode = "LOOPBACK"
+            elif self.radio_mixed['indicatorValue']:
+                self.audio_source_mode = "MIXED"
+            self.show_popup(f"Audio Source: {self.audio_source_mode}")
+
+        self.radio_mic_only = DirectRadioButton(
+            parent=self.audio_settings_frame, text="Microphone Only",
+            scale=0.045, pos=(-0.85, 0, 0.18),
+            command=change_audio_source
+        )
+        self.radio_loop_only = DirectRadioButton(
+            parent=self.audio_settings_frame, text="System Loopback Only",
+            scale=0.045, pos=(-0.85, 0, 0.08),
+            command=change_audio_source
+        )
+        self.radio_mixed = DirectRadioButton(
+            parent=self.audio_settings_frame, text="Mixed (Mic + Loopback)",
+            scale=0.045, pos=(-0.85, 0, -0.02),
+            command=change_audio_source
+        )
+
+        self.radio_mic_only.setOthers([self.radio_loop_only, self.radio_mixed])
+        self.radio_loop_only.setOthers([self.radio_mic_only, self.radio_mixed])
+        self.radio_mixed.setOthers([self.radio_mic_only, self.radio_loop_only])
+        self.radio_mic_only['indicatorValue'] = True
+
+        DirectLabel(
+            parent=self.audio_settings_frame, text="Select Microphone",
+            scale=0.05, pos=(-0.85, 0, -0.18),
+            text_align=TextNode.ALeft, text_fg=(1, 1, 1, 1)
+        )
+
+        microphones = [d['name'] for d in sd.query_devices() if d['max_input_channels'] > 0]
+        self.mic_dropdown = DirectOptionMenu(
+            parent=self.audio_settings_frame,
+            items=microphones if microphones else ["Default Microphone"],
+            initialitem=0,
+            scale=0.045,
+            pos=(-0.85, 0, -0.28),
+            command=lambda d: self.show_popup(f"Mic: {d}")
+        )
+
+        # Noise Reduction Checkbox
+        self.noise_reduction_checkbox = DirectCheckButton(
+            parent=self.audio_settings_frame,
+            text="Enable Noise Reduction",
+            scale=0.045,
+            pos=(-0.85, 0, -0.38),
+            command=lambda enabled: self.show_popup(
+                f"Noise Reduction {'ON' if enabled else 'OFF'}"
+            ),
+            text_fg=(1, 1, 1, 1)
         )
 
     def loadModels(self):
@@ -520,6 +662,39 @@ class SignLanguageApp(ShowBase):
         self.pose_index += 1
         return task.again
 
+    def show_popup(self, message, duration=1):
+        if hasattr(self, "active_popup") and self.active_popup:
+            self.active_popup.cleanup()
+            self.active_popup = None
+
+        popup = OnscreenText(
+            text=message,
+            pos=(0, -0.9),
+            scale=0.05,
+            fg=(1, 1, 1, 1),
+            bg=(0, 0, 0, 0),
+            align=TextNode.ACenter,
+            parent=self.render2d
+        )
+        self.active_popup = popup
+
+        def set_alpha(a):
+            if popup.isEmpty():
+                return
+            popup.setColor(1, 1, 1, a)
+            popup['bg'] = (0, 0, 0, 0)
+
+        anim = Sequence(
+            LerpFunc(set_alpha, fromData=0, toData=1, duration=0.25),
+            Wait(duration),
+            LerpFunc(set_alpha, fromData=1, toData=0, duration=0.25),
+            Func(lambda: not popup.isEmpty() and popup.removeNode()),
+            Func(setattr, self, "active_popup", None)
+        )
+
+        popup.cleanup = anim.finish
+        anim.start()
+
     def setup_media_control(self):
         """
         Set up background task for media control (play/pause).
@@ -535,19 +710,15 @@ class SignLanguageApp(ShowBase):
             self.media_control_active = not self.media_control_active
 
             if self.media_control_active:
-                self.media_toggle_button["text"] = "Media Control"
-                self.media_toggle_button["frameColor"] = (0.9, 0.3, 0.3, 1)
-                self.gloss_text_node.setText(
-                    "Media control starting (switch to media tab)")
+                self.show_popup("Media control starting (switch to media tab)")
+                self.media_toggle_button['image'] = "assets/icons/media-control-on.png"
                 self.last_media_action_time = time.time()
                 self.media_state = "starting"
                 print(
                     "Media control starting - switch to your media tab within 3 seconds!")
             else:
-                self.media_toggle_button["text"] = "Media Control"
-                self.media_toggle_button["frameColor"] = (0.3, 0.6, 0.9, 1)
-                self.gloss_text_node.setText(
-                    "Speech recognition active, media control inactive")
+                self.show_popup("media control inactive")
+                self.media_toggle_button['image'] = "assets/icons/media-control-off.png"
                 self.media_state = "paused"
                 print("Media control stopped")
 
@@ -640,11 +811,10 @@ class SignLanguageApp(ShowBase):
                 self.speech_processor = SpeechGloss(callback=self.handle_speech_result)
             if self.speech_processor.start():
                 self.speech_recognition_active = True
-                self.speech_toggle_button["text"] = "Speech"
-                self.speech_toggle_button["frameColor"] = (0.9, 0.3, 0.3, 1)
-                self.gloss_text_node.setText("Speech active. Ready to listen.")
+                self.show_popup("Speech active. Ready to listen.")
+                self.speech_toggle_button['image'] = "assets/icons/speech-recognition-on.png"
             else:
-                self.gloss_text_node.setText("Error: Speech failed to start")
+                self.show_popup("Error: Speech failed to start")
         except Exception as e:
             self.gloss_text_node.setText(f"Error: {str(e)}")
 
@@ -655,13 +825,12 @@ class SignLanguageApp(ShowBase):
             try:
                 if self.speech_processor and self.speech_processor.stop():
                     self.speech_recognition_active = False
-                    self.speech_toggle_button["text"] = "Speech"
-                    self.speech_toggle_button["frameColor"] = (0.3, 0.6, 0.9, 1)
-                    self.gloss_text_node.setText("Speech inactive.")
+                    self.show_popup("Speech inactive.")
+                    self.speech_toggle_button['image'] = "assets/icons/speech_recognition_off.png"
                 else:
                     self.gloss_text_node.setText("Error: Failed to stop speech")
             except Exception as e:
-                self.gloss_text_node.setText(f"Error: {str(e)}")
+                self.show_popup(f"Error: {str(e)}")
 
     def handle_speech_result(self, text, gloss):
         """

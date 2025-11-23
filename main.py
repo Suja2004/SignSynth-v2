@@ -23,6 +23,8 @@ if getattr(sys, 'frozen', False):
     loadPrcFileData("", "load-display pandagl")
     loadPrcFileData("", "aux-display tinydisplay")
     loadPrcFileData("", "window-title SignSynth")
+    loadPrcFileData('', 'background-color 0.1 0.1 0.1 1')
+    loadPrcFileData('', 'win-size 1280 720')
 else:
     base_path = os.path.abspath(os.path.dirname(__file__))
 
