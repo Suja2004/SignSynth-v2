@@ -12,9 +12,8 @@ from direct.gui.DirectFrame import DirectFrame
 from direct.gui.DirectButton import DirectButton
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectLabel import DirectLabel
-from direct.gui.DirectRadioButton import DirectRadioButton
 from direct.gui.DirectOptionMenu import DirectOptionMenu
-from direct.gui.DirectCheckButton import DirectCheckButton
+from direct.gui.DirectSlider import DirectSlider
 from direct.interval.IntervalGlobal import Sequence, LerpFunc, Wait, Func
 from direct.interval.LerpInterval import LerpPosInterval, LerpHprInterval
 from panda3d.core import (LVecBase3f, DirectionalLight, AmbientLight, TextNode, WindowProperties, Filename,
@@ -40,12 +39,12 @@ from speech_gloss import SpeechGloss
 
 class SignLanguageApp(ShowBase):
     """
-    Main application class: integrates 3D model, sign pose animation, UI,
-    speech recognition, and optional media control for sign language display.
+    Integrates 3D model, sign pose animation, UI, speech recognition, and media control for sign language display.
     """
 
     def __init__(self):
         ShowBase.__init__(self)
+
         self.loadModels()
         self.setupLights()
         self.setupSkybox()
@@ -61,6 +60,7 @@ class SignLanguageApp(ShowBase):
             print(f"Could not load pose data: {e}")
 
         self.media_control_active = False
+        self.sign_delay = 1.5
         self.play_interval = 5
         self.pause_interval = 5
         self.last_media_action_time = 0
@@ -69,6 +69,11 @@ class SignLanguageApp(ShowBase):
         self.speech_processor = None
         self.is_animating = False
         self.signing_complete = True
+
+        self.selected_device_index = None
+        self.audio_source_mode = "MIC"
+        self.available_devices = []
+
         self.setup_ui()
         self.start_speech_recognition()
         self.setup_media_control()
@@ -78,7 +83,6 @@ class SignLanguageApp(ShowBase):
         Manually opens the main Panda3D window and runs all
         window-dependent setup code.
         """
-
         if self.openDefaultWindow():
             print("Successfully opened Panda3D window.")
 
@@ -113,27 +117,25 @@ class SignLanguageApp(ShowBase):
             align=TextNode.ACenter
         )
         tooltip.hide()
-
         button.bind(DGG.ENTER, lambda event: tooltip.show())
         button.bind(DGG.EXIT, lambda event: tooltip.hide())
-
         tooltip.reparentTo(button)
 
     def toggle_tab(self):
-        if self.audio_settings_frame.isHidden():
-            self.audio_settings_frame.show()
+        if self.settings_frame.isHidden():
+            self.settings_frame.show()
         else:
-            self.audio_settings_frame.hide()
+            self.settings_frame.hide()
 
     def setup_ui(self):
         """
         Create a consolidated, on-screen user interface panel.
         """
-        COLOR_ACTIVE = (0.9, 0.3, 0.3, 1)
-        COLOR_INACTIVE = (0.3, 0.6, 0.9, 1)
         FRAME_COLOR = (0.1, 0.1, 0.1, 0)
         TEXT_COLOR = (1, 1, 1, 1)
-
+        ICON_SIZE = 0.085
+        BTN_X_POS = 0.55
+        
         self.ui_frame = DirectFrame(
             frameColor=FRAME_COLOR,
             frameSize=(-1.3, 1.3, -0.25, 0.25),
@@ -166,156 +168,258 @@ class SignLanguageApp(ShowBase):
             fg=TEXT_COLOR, align=TextNode.ALeft, wordwrap=20, mayChange=True
         )
 
-        self.speech_toggle_button = DirectButton(
-            parent=self.top_bar_frame,
-            image="assets/icons/speech-recognition-on.png",
-            scale=0.1,
-            command=self.toggle_speech_recognition,
-            pos=(0.55, 0, 0.1),
-            frameColor=COLOR_ACTIVE,
+        def create_icon_button(img_name, z_pos, cmd, tooltip_text):
+            btn = DirectButton(
+                parent=self.top_bar_frame,
+                image=f"assets/icons/{img_name}",
+                scale=ICON_SIZE,
+                command=cmd,
+                pos=(BTN_X_POS, 0, z_pos),
+                relief=None
+            )
+            btn.setTransparency(TransparencyAttrib.MAlpha)
+            self.add_tooltip(btn, tooltip_text)
+            return btn
+
+        self.reset_button = create_icon_button("reset.png", 0.3, self.reset_app, "Reset")
+        self.speech_toggle_button = create_icon_button("speech-recognition-on.png", 0.1, self.toggle_speech_recognition, "Speech Recognition")
+        self.media_toggle_button = create_icon_button("media-control-off.png", -0.1, self.toggle_media_control, "Media Control")
+        self.settings_tab_button = create_icon_button("settings.png", -1, self.toggle_tab, "Settings")
+        
+        self.setup_settings_tab()
+
+    def setup_settings_tab(self):
+        """
+        Sets up the Audio Settings UI panel with improved alignment and backend hooks.
+        """
+        self.settings_frame = DirectFrame(
+            frameColor=(0.15, 0.15, 0.15, 0.95),
+            frameSize=(-0.7, 0.7, -0.6, 0.6),
+            pos=(0, 0, 0),
+            parent=self.aspect2d
+        )
+        self.settings_frame.hide()
+
+        DirectLabel(
+            parent=self.settings_frame,
+            text="General Settings",
+            scale=0.07,
+            pos=(0, 0, 0.45),
+            text_fg=(1, 1, 1, 1),
+            frameColor=(0, 0, 0, 0)
+        )
+
+        self.close_tab_btn = DirectButton(
+            parent=self.settings_frame,
+            pos=(0.6, 0, 0.5),
+            command=self.toggle_tab,
+            image="assets/icons/close.png",
+            scale=0.05,
             relief=None
         )
 
-        self.media_toggle_button = DirectButton(
-            parent=self.top_bar_frame,
-            image="assets/icons/media-control-off.png",
-            scale=0.1,
-            command=self.toggle_media_control,
-            pos=(0.55, 0, -0.1),
-            frameColor=COLOR_INACTIVE,
-            relief=None
+        DirectLabel(
+            parent=self.settings_frame,
+            text="Sign Delay:",
+            scale=0.05,
+            pos=(-0.5, 0, 0.25),
+            text_align=TextNode.ALeft,
+            text_fg=(0.8, 0.8, 0.8, 1), frameColor=(0, 0, 0, 0)
         )
 
-        self.reset_button = DirectButton(
-            parent=self.top_bar_frame,
-            image="assets/icons/reset.png",
-            scale=0.1,
-            command=self.reset_app,
-            pos=(0.55, 0, 0.3),
-            frameColor=(0.8, 0.2, 0.2, 1),
-            relief=None
+        self.delay_value_label = DirectLabel(
+            parent=self.settings_frame,
+            text=f"{self.sign_delay:.1f}s", scale=0.05, pos=(0.5, 0, 0.25),
+            text_fg=(1, 1, 1, 1), frameColor=(0, 0, 0, 0)
         )
 
-        for btn in [self.speech_toggle_button, self.media_toggle_button, self.reset_button]:
+        def update_delay():
+            val = self.delay_slider['value']
+            self.sign_delay = round(val, 1)
+            self.delay_value_label['text'] = f"{self.sign_delay:.1f}s"
+
+        self.delay_slider = DirectSlider(
+            parent=self.settings_frame,
+            range=(0.5, 2.0),
+            value=self.sign_delay,
+            pageSize=0.1,
+            scale=0.4,
+            pos=(0, 0, 0.2),
+            command=update_delay,
+            thumb_frameColor=(0.8, 0.8, 0.8, 1),
+            frameColor=(0.3, 0.3, 0.3, 1)
+        )
+
+        DirectLabel(
+            parent=self.settings_frame,
+            text="Select Device:",
+            scale=0.05,
+            pos=(-0.5, 0, 0.05),
+            text_align=TextNode.ALeft,
+            text_fg=(0.8, 0.8, 0.8, 1),
+            frameColor=(0, 0, 0, 0)
+        )
+
+        self.device_menu = DirectOptionMenu(
+            parent=self.settings_frame,
+            scale=0.05,
+            pos=(-0.5, 0, -0.05),
+            items=["Loading..."],
+            command=self.on_device_selected,
+            text_align=TextNode.ALeft,
+            popupMarker_scale=0.5,
+            frameColor=(0, 0, 0, 0),
+            text_fg=(1, 1, 1, 1),
+            popupMenu_frameColor=(0, 0, 0, 0),
+            popupMenu_text_fg=(1, 1, 1, 0)
+        )
+
+        self.populate_audio_devices()
+
+        self.apply_btn = DirectButton(
+            parent=self.settings_frame,
+            image="assets/icons/apply.png",
+            pos=(0, 0, -0.25),
+            command=self.restart_speech_service,
+            scale=0.1,
+            relief=None
+        )
+        
+        for btn in [self.close_tab_btn, self.apply_btn]:
             btn.setTransparency(TransparencyAttrib.MAlpha)
 
-        self.add_tooltip(self.speech_toggle_button, "Speech Recognition")
-        self.add_tooltip(self.media_toggle_button, "Media Control")
-        self.add_tooltip(self.reset_button, "Reset")
+    def populate_audio_devices(self):
+        """
+        Scans system for devices. On Windows, filters for MME drivers to ensure compatibility with VOSK's 16kHz requirement.
+        """
+        try:
+            devices = sd.query_devices()
+            host_apis = sd.query_hostapis()
 
-    def setup_audio_settings_tab():
-        self.radio_mic_only = None
-        self.radio_loop_only = None
-        self.radio_mixed = None
-        self.enable_loopback_btn = None
-        self.loopback_enabled = False
+            valid_api_index = None
+            if sys.platform == 'win32':
+                for i, api in enumerate(host_apis):
+                    if 'MME' in api['name']:
+                        valid_api_index = i
+                        break
 
-        self.audio_source_mode = "MIC"
-        self.noise_reduction = False
+            self.available_devices = []
+            menu_items = []
 
-        self.audio_settings_frame = DirectFrame(
-            frameColor=(0.1, 0.1, 0.1, 0.9),
-            frameSize=(-1.3, 1.3, -0.75, 0.75),
-            pos=(0, 0, 0)
-        )
-        self.audio_settings_frame.hide()
+            for i, dev in enumerate(devices):
 
-        self.close_audio_tab_btn = DirectButton(
-            parent=self.audio_settings_frame,
-            text="✕",
-            scale=0.05,
-            pos=(0.85, 0, 0.45),
-            command=self.toggle_tab,
-            frameColor=(0.8, 0.2, 0.2, 1),
-            relief='flat'
-        )
+                if dev['max_input_channels'] <= 0:
+                    continue
 
-        self.tab_settings_audio_button = DirectButton(
-            parent=self.top_bar_frame,
-            text="Audio",
-            scale=0.055,
-            command=self.toggle_tab,
-            pos=(-1.0, 0, 0),
-            frameColor=(0.25, 0.25, 0.25, 1),
-            relief='raised',
-            text_fg=(1, 1, 1, 1)
-        )
+                if valid_api_index is not None:
+                    if dev['hostapi'] != valid_api_index:
+                        continue
 
-        DirectLabel(
-            parent=self.audio_settings_frame, text="Audio Settings",
-            scale=0.06, pos=(0, 0, 0.40), text_fg=(1, 1, 1, 1)
-        )
-        DirectLabel(
-            parent=self.audio_settings_frame, text="Input Source",
-            scale=0.05, pos=(-0.85, 0, 0.28),
-            text_align=TextNode.ALeft, text_fg=(1, 1, 1, 1)
-        )
+                dev_name = dev['name']
+                self.available_devices.append((dev_name, i))
 
-        def change_audio_source():
-            if not (self.radio_mic_only and self.radio_loop_only and self.radio_mixed):
-                return
+                display_name = dev_name[:25] + \
+                    "..." if len(dev_name) > 25 else dev_name
+                menu_items.append(f"{display_name}")
 
-            if self.radio_mic_only['indicatorValue']:
-                self.audio_source_mode = "MIC"
-            elif self.radio_loop_only['indicatorValue']:
-                self.audio_source_mode = "LOOPBACK"
-            elif self.radio_mixed['indicatorValue']:
-                self.audio_source_mode = "MIXED"
-            self.show_popup(f"Audio Source: {self.audio_source_mode}")
+            if not menu_items:
+                menu_items = ["Default Device"]
+                self.available_devices = [(None, None)]
 
-        self.radio_mic_only = DirectRadioButton(
-            parent=self.audio_settings_frame, text="Microphone Only",
-            scale=0.045, pos=(-0.85, 0, 0.18),
-            command=change_audio_source
-        )
-        self.radio_loop_only = DirectRadioButton(
-            parent=self.audio_settings_frame, text="System Loopback Only",
-            scale=0.045, pos=(-0.85, 0, 0.08),
-            command=change_audio_source
-        )
-        self.radio_mixed = DirectRadioButton(
-            parent=self.audio_settings_frame, text="Mixed (Mic + Loopback)",
-            scale=0.045, pos=(-0.85, 0, -0.02),
-            command=change_audio_source
-        )
+            self.device_menu['items'] = menu_items
+            self.device_menu.set(0)
 
-        self.radio_mic_only.setOthers([self.radio_loop_only, self.radio_mixed])
-        self.radio_loop_only.setOthers([self.radio_mic_only, self.radio_mixed])
-        self.radio_mixed.setOthers([self.radio_mic_only, self.radio_loop_only])
-        self.radio_mic_only['indicatorValue'] = True
+        except Exception as e:
+            print(f"Error querying audio devices: {e}")
+            self.device_menu['items'] = ["Error loading devices"]
 
-        DirectLabel(
-            parent=self.audio_settings_frame, text="Select Microphone",
-            scale=0.05, pos=(-0.85, 0, -0.18),
-            text_align=TextNode.ALeft, text_fg=(1, 1, 1, 1)
-        )
+    def on_device_selected(self, selection):
+        """Callback when dropdown changes."""
+        index_in_list = self.device_menu.selectedIndex
+        if 0 <= index_in_list < len(self.available_devices):
+            _, dev_id = self.available_devices[index_in_list]
+            self.selected_device_index = dev_id
 
-        microphones = [d['name'] for d in sd.query_devices() if d['max_input_channels'] > 0]
-        self.mic_dropdown = DirectOptionMenu(
-            parent=self.audio_settings_frame,
-            items=microphones if microphones else ["Default Microphone"],
-            initialitem=0,
-            scale=0.045,
-            pos=(-0.85, 0, -0.28),
-            command=lambda d: self.show_popup(f"Mic: {d}")
-        )
+    def restart_speech_service(self):
+        """
+        Stops the current speech processor and starts a new one 
+        with the selected device settings.
+        """
+        if self.speech_recognition_active:
+            try:
+                if self.speech_processor:
+                    self.speech_processor.stop()
+            except Exception as e:
+                print(f"Error stopping speech: {e}")
 
-        # Noise Reduction Checkbox
-        self.noise_reduction_checkbox = DirectCheckButton(
-            parent=self.audio_settings_frame,
-            text="Enable Noise Reduction",
-            scale=0.045,
-            pos=(-0.85, 0, -0.38),
-            command=lambda enabled: self.show_popup(
-                f"Noise Reduction {'ON' if enabled else 'OFF'}"
-            ),
-            text_fg=(1, 1, 1, 1)
-        )
+            self.speech_recognition_active = False
+            self.show_popup("Restarting Audio Service...")
+
+            time.sleep(0.2)
+
+        self.start_speech_recognition()
+
+    def start_speech_recognition(self):
+        """
+        Starts the speech recognition service with the currently selected device index.
+        """
+        try:
+            if not self.speech_processor:
+                self.speech_processor = SpeechGloss(
+                    callback=self.handle_speech_result,
+                    device_index=self.selected_device_index
+                )
+            else:
+                if hasattr(self.speech_processor, 'set_device'):
+                    self.speech_processor.set_device(
+                        self.selected_device_index)
+                else:
+                    self.speech_processor = SpeechGloss(
+                        callback=self.handle_speech_result,
+                        device_index=self.selected_device_index
+                    )
+
+            if self.speech_processor.start():
+                self.speech_recognition_active = True
+
+                device_label = "Default Device"
+                if self.selected_device_index is not None:
+                    found_name = None
+                    for name, dev_id in self.available_devices:
+                        if dev_id == self.selected_device_index:
+                            found_name = name
+                            break
+                    if found_name:
+                        device_label = found_name
+                    else:
+                        device_label = f"Device {self.selected_device_index}"
+
+                self.show_popup(f"Listening on: {device_label}")
+                self.speech_toggle_button['image'] = "assets/icons/speech-recognition-on.png"
+            else:
+                self.show_popup("Error: Speech failed to start")
+        except Exception as e:
+            self.gloss_text_node.setText(f"Error: {str(e)}")
+            print(f"Speech Start Error: {e}")
+
+    def toggle_speech_recognition(self):
+        if not self.speech_recognition_active:
+            self.start_speech_recognition()
+        else:
+            try:
+                if self.speech_processor and self.speech_processor.stop():
+                    self.speech_recognition_active = False
+                    self.show_popup("Speech inactive.")
+                    self.speech_toggle_button['image'] = "assets/icons/speech_recognition_off.png"
+                else:
+                    self.gloss_text_node.setText(
+                        "Error: Failed to stop speech")
+            except Exception as e:
+                self.show_popup(f"Error: {str(e)}")
 
     def loadModels(self):
         """Load 3D character model, arms, and attach to scene graph."""
         try:
-
             body_path = self.get_panda_model_path('character/body.bam')
             print(f"Loading body from: {body_path}")
             self.torso = self.loader.loadModel(body_path)
@@ -344,10 +448,6 @@ class SignLanguageApp(ShowBase):
             raise
 
     def setup_arm_details(self):
-        """
-        Store references to all finger segment nodes for both arms
-        so poses can be efficiently applied.
-        """
         self.rthumb1 = self.rarm.find("**/t1")
         self.rthumb2 = self.rarm.find("**/t2")
         self.rindex1 = self.rarm.find("**/i1")
@@ -379,7 +479,6 @@ class SignLanguageApp(ShowBase):
         self.lpinky3 = self.larm.find("**/p3")
 
     def setupLights(self):
-        """Create a main directional light and ambient light for 3D scene."""
         mainLight = DirectionalLight('main light')
         mainLight.setShadowCaster(True)
         mainLightNodePath = self.render.attachNewNode(mainLight)
@@ -392,7 +491,6 @@ class SignLanguageApp(ShowBase):
         self.render.setShaderAuto()
 
     def setupSkybox(self):
-        """Loads a skybox model if available, otherwise prints an error."""
         try:
             skybox = self.loader.loadModel('skybox/skybox.bam')
             skybox.setScale(50)
@@ -404,28 +502,17 @@ class SignLanguageApp(ShowBase):
             print(f"Could not load skybox: {e}")
 
     def get_resource_path(self, relative_path):
-        """Get absolute path to resource, works for dev and PyInstaller"""
         if getattr(sys, 'frozen', False):
-
             base_path = sys._MEIPASS
         else:
-
             base_path = os.path.abspath(os.path.dirname(__file__))
-
         return os.path.join(base_path, relative_path)
 
     def get_panda_model_path(self, relative_path):
-        """
-        Get Panda3D-compatible model path.
-        NOTE: This now just returns the relative path, as the
-        model-path is set correctly at startup for both dev and exe.
-        """
         return relative_path
 
     def loadAllPoseData(self):
-        """Load all sign pose definitions from local JSON file."""
         pose_file = self.get_resource_path("sign_poses.json")
-
         try:
             with open(pose_file, "r") as f:
                 return json.load(f)
@@ -437,9 +524,6 @@ class SignLanguageApp(ShowBase):
             raise
 
     def loadSignPoses(self, name):
-        """
-        Apply pose data for a given sign or letter to hand and finger models.
-        """
         poses = self.gesture_data.get(name)
         pose = poses[0] if isinstance(poses, list) else poses
         if not pose:
@@ -492,10 +576,6 @@ class SignLanguageApp(ShowBase):
                                  self.rpinky3], f["pinky"])
 
     def expandPoseSequence(self, sequence):
-        """
-        For each recognized word, use that sign if available; otherwise,
-        expand to fingerspelling (letter signs).
-        """
         result = []
         for word in sequence:
             if word.lower() in self.gesture_data:
@@ -507,9 +587,6 @@ class SignLanguageApp(ShowBase):
         return result
 
     def start_animation(self, text):
-        """
-        Start animating signs for a recognized phrase or sentence.
-        """
         self.stopAnimation()
         self.current_text = text.strip()
         words = self.current_text.split()
@@ -529,7 +606,6 @@ class SignLanguageApp(ShowBase):
         self.taskMgr.add(self.animateNextPose, "SignAnimation")
 
     def stopAnimation(self):
-
         if self.is_animating:
             self.taskMgr.remove("SignAnimation")
             self.is_animating = False
@@ -541,9 +617,6 @@ class SignLanguageApp(ShowBase):
                 self.current_right_seq = None
 
     def slideArms(self):
-        """
-        Provide a simple sliding motion animation for fingerspelling transitions.
-        """
         slide_distance = 0.5
         time = 0.2
         sequence = Sequence(
@@ -556,9 +629,6 @@ class SignLanguageApp(ShowBase):
         sequence.start()
 
     def animateNextPose(self, task):
-        """
-        Animates each sign or letter in the expanded sequence, applying relevant poses.
-        """
         if self.pose_index >= len(self.expanded_sequence):
             if hasattr(self,
                        'current_left_seq') and self.current_left_seq and self.current_left_seq.isPlaying():
@@ -658,7 +728,7 @@ class SignLanguageApp(ShowBase):
         self.gloss_text_node.setText(f"Signing: {self.current_text}")
         self.recognized_text_node.setText(f"{pose_name.upper()}")
 
-        task.delayTime = 1.5
+        task.delayTime = self.sign_delay
         self.pose_index += 1
         return task.again
 
@@ -696,16 +766,9 @@ class SignLanguageApp(ShowBase):
         anim.start()
 
     def setup_media_control(self):
-        """
-        Set up background task for media control (play/pause).
-        Takes no effect until activated.
-        """
         self.taskMgr.add(self.media_control_task, "MediaControlTask")
 
     def toggle_media_control(self):
-        """
-        Enable or disable media control mode. Updates UI and resets timing.
-        """
         try:
             self.media_control_active = not self.media_control_active
 
@@ -727,10 +790,6 @@ class SignLanguageApp(ShowBase):
             self.gloss_text_node.setText(f"Error: {str(e)}")
 
     def media_control_task(self, task):
-        """
-        Background task for alternating media play/pause based on timing.
-        Only active if media_control_active flag is set.
-        """
         if not self.media_control_active:
             return Task.cont
         if not self.signing_complete:
@@ -740,7 +799,6 @@ class SignLanguageApp(ShowBase):
         elapsed = current_time - self.last_media_action_time
 
         if self.media_state == "starting" and elapsed >= 3:
-
             self.last_media_action_time = current_time
             self.media_state = "playing"
             self.gloss_text_node.setText("Media playing")
@@ -751,28 +809,18 @@ class SignLanguageApp(ShowBase):
         return Task.cont
 
     def pause_media(self):
-        """
-        Simulate keyboard press to pause media and update internal state/UI.
-        """
         self.simulate_space_press()
         self.last_media_action_time = time.time()
         self.media_state = "paused"
         self.gloss_text_node.setText("Media paused")
 
     def resume_media(self):
-        """
-        Simulate keyboard press to resume media and update internal state/UI.
-        """
         self.simulate_space_press()
         self.last_media_action_time = time.time()
         self.media_state = "playing"
         self.gloss_text_node.setText("Media playing")
 
     def simulate_space_press(self):
-        """
-        Programmatically sends a space key press to control external media playback.
-        Handles cross-platform differences.
-        """
         if sys.platform == 'win32':
             try:
                 shell = win32com.client.Dispatch("WScript.Shell")
@@ -788,55 +836,21 @@ class SignLanguageApp(ShowBase):
                 print("Could not import pyautogui - media control may not work properly")
 
     def reset_app(self):
-        """Reset screen text, stop animation, and return model to default pose."""
         self.stopAnimation()
         try:
             self.loadSignPoses("default")
         except:
             pass
 
-        # Clear UI texts
         self.recognized_text_node.setText("...")
         self.gloss_text_node.setText("Ready.")
 
-        # Clear internal state
         self.current_pose = "default"
         self.expanded_sequence = []
         self.pose_index = 0
         self.signing_complete = True
 
-    def start_speech_recognition(self):
-        try:
-            if not self.speech_processor:
-                self.speech_processor = SpeechGloss(callback=self.handle_speech_result)
-            if self.speech_processor.start():
-                self.speech_recognition_active = True
-                self.show_popup("Speech active. Ready to listen.")
-                self.speech_toggle_button['image'] = "assets/icons/speech-recognition-on.png"
-            else:
-                self.show_popup("Error: Speech failed to start")
-        except Exception as e:
-            self.gloss_text_node.setText(f"Error: {str(e)}")
-
-    def toggle_speech_recognition(self):
-        if not self.speech_recognition_active:
-            self.start_speech_recognition()
-        else:
-            try:
-                if self.speech_processor and self.speech_processor.stop():
-                    self.speech_recognition_active = False
-                    self.show_popup("Speech inactive.")
-                    self.speech_toggle_button['image'] = "assets/icons/speech_recognition_off.png"
-                else:
-                    self.gloss_text_node.setText("Error: Failed to stop speech")
-            except Exception as e:
-                self.show_popup(f"Error: {str(e)}")
-
     def handle_speech_result(self, text, gloss):
-        """
-        Called whenever new speech is recognized.
-        Updates UI and triggers sign animation (unless an animation is already running).
-        """
         if text and gloss and not self.is_animating:
             self.recognized_text_node.setText(text)
             self.gloss_text_node.setText(gloss)
