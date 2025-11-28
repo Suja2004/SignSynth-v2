@@ -11,7 +11,7 @@ from panda3d.core import loadPrcFileData, Filename
 from loading_screen import LoadingScreen
 from sign_language_app import SignLanguageApp
 
-APP_VERSION = "v1.1.0"
+APP_VERSION = "v1.0.0"
 GITHUB_REPO = "Suja2004/ASR"
 
 if getattr(sys, 'frozen', False):
@@ -285,7 +285,7 @@ if __name__ == "__main__":
     loading.update()
 
     try:
-        panda_app = SignLanguageApp()
+        panda_app = SignLanguageApp(version=APP_VERSION)
     except Exception as e:
         loading.close()
         import tkinter.messagebox as messagebox

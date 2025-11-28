@@ -42,8 +42,10 @@ class SignLanguageApp(ShowBase):
     Integrates 3D model, sign pose animation, UI, speech recognition, and media control for sign language display.
     """
 
-    def __init__(self):
+    def __init__(self, version):
         ShowBase.__init__(self)
+        
+        self.version = version
 
         self.loadModels()
         self.setupLights()
@@ -287,6 +289,15 @@ class SignLanguageApp(ShowBase):
         
         for btn in [self.close_tab_btn, self.apply_btn]:
             btn.setTransparency(TransparencyAttrib.MAlpha)
+            
+        DirectLabel(
+            parent=self.settings_frame,
+            text=self.version,
+            scale=0.07,
+            pos=(0, 0, -0.5),
+            text_fg=(1, 1, 1, 1),
+            frameColor=(0, 0, 0, 0)
+        )
 
     def populate_audio_devices(self):
         """
